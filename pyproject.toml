@@ -4,4 +4,10 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "llm-sdk",
+    "pydantic>=2.13.4",
+]
+
+[tool.uv.sources]
+llm-sdk = { path = "llm_sdk/dist/llm_sdk-0.1.0-py3-none-any.whl" }
