@@ -1,5 +1,6 @@
 import sys
-import json
+from json import load, JSONDecodeError
+from pydantic import ValidationError
 from .models import FunctionDefition, Prompt
 from .errors import ParsingError
 
@@ -16,15 +17,12 @@ def cli_parsing(flag: str) -> str:
         if not sys.argv[index + 1].endswith('.json'):
             raise ParsingError(f'Invalid extension: "{flag}" '
                                'must point to a ".json" file')
-        elif sys.argv[index + 1].count('.json') > 1:
-            raise ParsingError(f'Invalid extension: "{flag}" must point to '
-                               'a file with exactly one ".json" extension')
     except IndexError:
         raise ParsingError(f'Missing path after "{flag}"')
     return sys.argv[index + 1]
 
 
-def parsing():
+def parsing() -> dict[str, str]:
     flags = {'func_file': cli_parsing('--functions_definition'),
              'input_file': cli_parsing('--input'),
              'output_file': cli_parsing('--output')}
@@ -33,10 +31,29 @@ def parsing():
             flags[key] = DEFAULT_PATHS[key]
     try:
         with open(flags['func_file']) as file:
-            for func in json.load(file):
-                FunctionDefition(**func)
+            try:
+                for func in load(file):
+                    FunctionDefition(**func)
+            except JSONDecodeError as e:
+                raise ParsingError(f"Invalid JSON in '{flags['func_file']}':"
+                                   f"line {e.lineno}, column {e.colno}")
+            except ValidationError:
+                raise ParsingError("Invalid file format: "
+                                   f"'{flags['func_file']}' contains invalid "
+                                   "or missing fields")
+
         with open(flags['input_file']) as file:
-            for prompt in json.load(file):
-                Prompt(**prompt)
+            try:
+                for prompt in load(file):
+                    Prompt(**prompt)
+            except JSONDecodeError as e:
+                raise ParsingError(f"Invalid JSON in '{flags['input_file']}':"
+                                   f"line {e.lineno}, column {e.colno}")
+            except ValidationError:
+                raise ParsingError("Invalid file format: "
+                                   f"'{flags['input_file']}' contains invalid "
+                                   "or missing fields")
+
     except FileNotFoundError as e:
         raise ParsingError(f'File not found: {e.filename}')
+    return flags
