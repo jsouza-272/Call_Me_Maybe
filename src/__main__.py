@@ -16,12 +16,11 @@ exemple = ('[\n{\n"prompt": "What is the sum of 2 and 3?",\n'
            '"name": "fn_reverse_string",\n"parameters": {"s": "hello"}\n}\n]')
 
 system_prompt = ("<|im_start|>system"
-                 " Voce deve agir como function calling tool."
+                 " Voce deve agir como tool/function calling."
                  "As funcoes que vc deve usar estao "
                  f"em formato json e sao as seguintes: {functions}."
-                 "se espera uma resposta em formato de json aqui vao algums "
+                 "a resposta deve estar em json aqui vao algums "
                  f"exemplos de respostas esperada: {exemple}.\n"
-                 "a resposta nao deve incluir a linha de pensamento que te levou ate ela"
                  "<|im_end|>" )
 
 prompt =  \
