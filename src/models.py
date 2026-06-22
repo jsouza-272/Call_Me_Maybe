@@ -6,6 +6,9 @@ class Types(BaseModel):
     model_config = ConfigDict(extra='forbid')
     type: Literal['number', 'string']
 
+    def __repr__(self):
+        return self.type
+
 
 class FunctionDefition(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -14,7 +17,15 @@ class FunctionDefition(BaseModel):
     parameters: dict[str, Types]
     returns: Types
 
+    def __repr__(self):
+        params = "".join(f"{k}: {v}" for k, v in self.parameters)
+        rep = f"{self.name}({params}) -> {self.returns}\n{self.description}"
+        return rep
+
 
 class Prompt(BaseModel):
     model_config = ConfigDict(extra='forbid')
     prompt: str
+
+    def __repr__(self):
+        return self.prompt

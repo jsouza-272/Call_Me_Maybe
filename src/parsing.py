@@ -1,6 +1,7 @@
 import sys
 from json import load, JSONDecodeError
 from pydantic import ValidationError
+from typing import Any
 from .models import FunctionDefition, Prompt
 from .errors import ParsingError
 
@@ -22,7 +23,7 @@ def cli_parsing(flag: str) -> str:
     return sys.argv[index + 1]
 
 
-def parsing() -> dict[str, str]:
+def parsing() -> dict[str, Any]:
     flags = {'func_file': cli_parsing('--functions_definition'),
              'input_file': cli_parsing('--input'),
              'output_file': cli_parsing('--output')}
@@ -32,8 +33,7 @@ def parsing() -> dict[str, str]:
     try:
         with open(flags['func_file']) as file:
             try:
-                for func in load(file):
-                    FunctionDefition(**func)
+                functions = [FunctionDefition(**func) for func in load(file)]
             except JSONDecodeError as e:
                 raise ParsingError(f"Invalid JSON in '{flags['func_file']}':"
                                    f"line {e.lineno}, column {e.colno}")
@@ -44,8 +44,7 @@ def parsing() -> dict[str, str]:
 
         with open(flags['input_file']) as file:
             try:
-                for prompt in load(file):
-                    Prompt(**prompt)
+                prompts = [Prompt(**prompt) for prompt in load(file)]
             except JSONDecodeError as e:
                 raise ParsingError(f"Invalid JSON in '{flags['input_file']}':"
                                    f"line {e.lineno}, column {e.colno}")
@@ -56,4 +55,6 @@ def parsing() -> dict[str, str]:
 
     except FileNotFoundError as e:
         raise ParsingError(f'File not found: {e.filename}')
-    return flags
+    return {"output_file": flags['output_file'],
+            "functions": functions,
+            "prompts": prompts}
