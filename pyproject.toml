@@ -2,7 +2,7 @@
 name = "call-me-maybe"
 version = "0.1.0"
 description = "Add your description here"
-authors = ["Joao Souza <jvpvpsouza7@gmail.com>"]
+authors = ["Joao Souza <jsouza@student.42lisboa.com>"]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,6 +16,11 @@ dependencies = [
 [tool.flake8]
 extend-exclude = [
     ".venv",
-	"test.py",
 	"llm_sdk"
 ]
+
+[tool.mypy]
+exclude = ["llm_sdk/"]
+
+[tool.uv.sources]
+llm-sdk = { path = "llm_sdk/dist/llm_sdk-0.1.0-py3-none-any.whl" }
