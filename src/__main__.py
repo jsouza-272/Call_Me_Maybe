@@ -20,7 +20,6 @@ def call(sys: list, prompt, llm: Small_LLM_Model):
     answer = list()
     i = 0
     while token != 151645 and i < 50:
-        print(i)
         logits = softmax(llm.get_logits_from_input_ids(encoded_list + answer))
         token = logits.index(max(logits))
         if token in [151667, 151668]:
@@ -28,6 +27,8 @@ def call(sys: list, prompt, llm: Small_LLM_Model):
         else:
             answer.append(token)
         i += 1
+    if i == 50:
+        print("Token limit!")
     return llm.decode(answer)
 
 
@@ -48,8 +49,6 @@ example2 = ('"prompt": "What is the sum of 2 and 3?"\n"function": fn_add_numbers
 system_prompt = ("<|im_start|>system\n"
                  "/no_think\n"
                  "You must act as a function calling system.\n"
-                # "Return only a JSON object following the provided schema.\n"
-                # f"schema example: {example}\n"
                  "Return user prompt and the name of the function"
                  f"example: {example2}"
                  f"The functions you must use are the following: {infos.get('functions')}.\n"
