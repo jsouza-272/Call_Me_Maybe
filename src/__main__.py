@@ -1,18 +1,27 @@
 from .parsing import parsing
 from llm_sdk import Small_LLM_Model
+import math
+
+
+TEMPERATURE = 0.3
+
+
+def softmax(logits: list[float]) -> list[float]:
+    max_logit = max(logits)
+    new = [math.exp((logit - max_logit) / TEMPERATURE) for logit in logits]
+    logits_sum = sum(new)
+    return [logit / logits_sum for logit in new]
 
 
 def call(sys: list, prompt, llm: Small_LLM_Model):
-    print('call')
     encoded = llm.encode(prompt)
-    encoded_list = encoded.squeeze().tolist() + sys
+    encoded_list = sys + encoded.squeeze().tolist()
     token = 0
     answer = list()
     i = 0
-    print('antes do loop')
     while token != 151645 and i < 50:
         print(i)
-        logits = llm.get_logits_from_input_ids(encoded_list + answer)
+        logits = softmax(llm.get_logits_from_input_ids(encoded_list + answer))
         token = logits.index(max(logits))
         if token in [151667, 151668]:
             encoded_list.append(token)
@@ -28,14 +37,21 @@ llm = Small_LLM_Model()
 example = ('{\n\t"prompt": "What is the sum of 2 and 3?",\n\t'
            '"name": "fn_add_numbers",\n\t"parameters": {"a": 2.0, "b": 3.0}\n}'
            '\n{\n\t"prompt": "Reverse the string \'hello\'",\n\t'
-           '"name": "fn_reverse_string",\n\t"parameters": {"s": "hello"}\n}\n')
+           '"name": "fn_reverse_string",\n\t"parameters": {"s": "hello"}\n}\n'
+           '\n{\n\t"prompt": "Calculate the square root of 144",\n\t'
+           '"name": "fn_get_square_root",\n\t"parameters": {"a": 144.0}\n}')
+
+example2 = ('"prompt": "What is the sum of 2 and 3?"\n"function": fn_add_numbers(a=2.0, b=3.0)\n'
+            '"prompt": "Reverse the string \'hello\'"\n"function": fn_reverse_string(s:"hello")\n'
+            '"prompt": "Calculate the square root of 144"\n"function": fn_get_square_root(a: 144.0)')
 
 system_prompt = ("<|im_start|>system\n"
                  "/no_think\n"
                  "You must act as a function calling system.\n"
-#                "Return only the name of the function and then parameters"
-                 "Return only a JSON object following the provided schema.\n"
-                 f"schema example: {example}\n"
+                # "Return only a JSON object following the provided schema.\n"
+                # f"schema example: {example}\n"
+                 "Return user prompt and the name of the function"
+                 f"example: {example2}"
                  f"The functions you must use are the following: {infos.get('functions')}.\n"
                  "<|im_end|>")
 
@@ -44,9 +60,9 @@ sys = llm.encode(system_prompt)
 sys_list = sys.squeeze().tolist()
 answers = ""
 for p in infos.get('prompts'):
-    user_prompt = f"<|im_start|>user\n {p} <|im_end|> <|im_start|>assistant\n"
+    user_prompt = f"<|im_start|>user\n {p!r} <|im_end|> <|im_start|>assistant\n"
     prompt = user_prompt
-    answers.join(call(sys_list, prompt, llm))
-    answers.join('\n')
-    print(answers)
+    answer = call(sys_list, prompt, llm)
+    answers += answer + '\n'
+    print("resposta:", answer)
 print(answers)
