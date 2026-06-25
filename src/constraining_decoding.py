@@ -7,4 +7,4 @@ def get_allowed(state):
 
 def constraining_decoding(state, vocab, logits, model: Small_LLM_Model):
     allowed = model.encode(get_allowed(state))
-    for 
+    
