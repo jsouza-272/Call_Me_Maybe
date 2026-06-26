@@ -1,6 +1,6 @@
-ifeq ($(shell [ -d ~/goinfre ] && echo true), true)
-export UV_CACHE_DIR := ~/goinfre/jsouza/.cache/uv
-export HF_HOME := ~/goinfre/.cache/huggingface
+ifeq ($(shell [ -d $(HOME)/goinfre ] && echo true), true)
+export UV_CACHE_DIR := $(HOME)/goinfre/jsouza/.cache/uv
+export HF_HOME := $(HOME)/goinfre/.cache/huggingface
 endif
 
 run:

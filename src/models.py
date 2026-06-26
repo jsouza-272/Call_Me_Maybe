@@ -20,9 +20,6 @@ class FunctionDefition(BaseModel):
     def __repr__(self):
         params = "".join(f"{k}: {v!r}, "
                          for k, v in self.parameters.items())[:-2]
-        #rep = (f'name: {self.name}\ndescription: {self.description}'
-        #       f'parameters: {params}\nreturns: {self.returns!r}')
-
         rep = (f"{self.name}({params}) -> {self.returns!r}\n"
                f"description: {self.description}")
         return rep
