@@ -8,3 +8,9 @@ run:
 	uv build llm_sdk
 	uv sync
 	uv run python3 -m src
+
+test:
+	clear
+	uv build llm_sdk
+	uv sync
+	uv run python3 src/.test.py
