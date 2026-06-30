@@ -5,6 +5,7 @@ from .models import FunctionDefition, Prompt
 from .trie import Trie
 from .parsing import parsing
 import math
+import re
 
 
 FUNCTION = 'F'
@@ -15,9 +16,10 @@ class LlmInteface:
     def __init__(self, model: str = "Qwen/Qwen3-0.6B", *,
                  temperature: float = 0.3):
         infos = parsing()
-        self.__functions = infos.get("functions")
+        self.__functions: dict[str, FunctionDefition] = {f.name: f
+                                                         for f in infos["functions"]}
         self.__prompts = self._format_prompt(infos.get("prompts"))
-        self.__output = infos.get("output_file")
+        self.__output: str = infos["output_file"]
         self.__temperature = temperature
         self.__model = Small_LLM_Model(model)
         if "Qwen3-0.6B" in model:
@@ -50,7 +52,7 @@ class LlmInteface:
                           "Return only the paramaters of the funtion\n"
                           f"example: {example}\n"
                           "The functions you must use are the following: "
-                          f"{self.__functions!r}.\n"
+                          f"{list(self.__functions.values())!r}.\n"
                           "<|im_end|>")
         else:
             example = ('prompt: "What is the sum of 2 and 3?"\n'
@@ -64,7 +66,7 @@ class LlmInteface:
                           "Return only the name of the funtion\n"
                           f"example: {example}\n"
                           "The functions you must use are the following: "
-                          f"{self.__functions!r}.\n"
+                          f"{list(self.__functions.values())!r}.\n"
                           "<|im_end|>")
         return sys_prompt
 
@@ -98,21 +100,10 @@ class LlmInteface:
             else:
                 logits[index] = float("-inf")
 
-    def _get_parameter(self, logits: list[float], trie: Trie) -> None:
-        # usar regex (import re)
-        for index in range(len(logits)):
-            if index in trie.children:
-                continue
-            elif index not in self.__vocab:
-                logits[index] = float("-inf")
-                continue
-            else:
-                logits[index] = float("-inf")
-
     def _generate_function(self, tokenized_prompt: list) -> str:
         trie = self._create_trie([self.__model.encode(
             func.name
-            ).squeeze().tolist() for func in self.__functions])
+            ).squeeze().tolist() for func in self.__functions.values()])
         function_name = list()
         while True:
             logits = self.__model.get_logits_from_input_ids(
@@ -121,35 +112,59 @@ class LlmInteface:
             self._get_function_name(logits, trie)
             logits = self._softmax(logits)
             token = logits.index(max(logits))
-            function_name.append(token)
-            if not trie.children or function_name[-1] == self.__end_key:
+            if not trie.children or token == self.__end_key:
                 break
+            function_name.append(token)
             trie = trie.children[token]
+        print(function_name)
         return self.__model.decode(function_name)
 
-    def _generate_parameter_name(self, tokenized_prompt: list) -> str:
-        tokens_list = []
-        print("start")
-        for func in self.__functions:
-            for param in func.parameters:
-                print(param)
-                param_token = self.__model.encode(param).squeeze().tolist()
-                if isinstance(param_token, list):
-                    tokens_list.append(param_token)
-                else:
-                    tokens_list.append([param_token])
-        trie = self._create_trie(tokens_list)
+    def _get_parameters(self, logits: list[float],
+                        allowed: list[str]) -> None:
+        for index in range(len(logits)):
+            if re.fullmatch(f"({'|'.join(re.escape(a) for a in allowed)})*",
+                            self.__model.decode([index])):
+                continue
+            if index == self.__end_key:
+                continue
+            if index not in self.__vocab:
+                logits[index] = float("-inf")
+                continue
+            else:
+                logits[index] = float("-inf")
+
+    def _get_parameter_state(self, parameters: list, func: FunctionDefition):
+        if not parameters:
+            return list(func.parameters.keys()) + ["-", ","]
+        if any(parameters[-1] in self.__model.encode(param)
+               for param in func.parameters.keys()):
+            return ["="]
+        if parameters[-1] == self.__model.encode("="):
+            return ["\\w", "\\s" "\\", "\"", "\'", "?", "."]
+        if parameters[-1] == self.__model.encode(','):
+            return list(func.parameters.keys()) + ["-", ",", " "]
+        else:
+            return ["\\w", "\\s" "\\", "\"", "\'", "?", "."]
+
+    def _generate_parameters(self, tokenized_prompt: list,
+                             function_name: str) -> str:
         parameters = list()
         while True:
             logits = self.__model.get_logits_from_input_ids(
                 tokenized_prompt + parameters
             )
-            #self._get_parameter(logits, trie)
+            allowed = self._get_parameter_state(
+                parameters,
+                self.__functions[function_name]
+            )
+            print(allowed)
+            self._get_parameters(logits, allowed)
             logits = self._softmax(logits)
             token = logits.index(max(logits))
-            parameters.append(token)
-            if parameters[-1] == self.__end_key:
+            print(token, f"'{self.__model.decode(token)}'")
+            if token == self.__end_key:
                 break
+            parameters.append(token)
             print(self.__model.decode(parameters))
         return self.__model.decode(parameters)
 
@@ -167,9 +182,14 @@ class LlmInteface:
         tokenized_sys_prompt = self.__model.encode(
                 sys_prompt
                 ).squeeze().tolist()
-        tokenized_function_name = self.__model.encode(function_answer + "\n").squeeze().tolist()
+        tokenized_function_name = self.__model.encode(
+            function_answer + "\n"
+            ).squeeze().tolist()
         parameters_answer = self._generate_parameters(
-                tokenized_sys_prompt + tokenized_user_prompt + tokenized_function_name
+                tokenized_sys_prompt +
+                tokenized_user_prompt +
+                tokenized_function_name,
+                function_answer
                 )
         print(parameters_answer)
         return

@@ -1,7 +1,6 @@
 import sys
 from json import load, JSONDecodeError
 from pydantic import ValidationError
-from typing import Any
 from .models import FunctionDefition, Prompt
 from .errors import ParsingError
 
@@ -23,7 +22,7 @@ def cli_parsing(flag: str) -> str:
     return sys.argv[index + 1]
 
 
-def parsing() -> dict[str, Any]:
+def parsing() -> dict[str, list[FunctionDefition] | list[Prompt] | str]:
     flags = {'func_file': cli_parsing('--functions_definition'),
              'input_file': cli_parsing('--input'),
              'output_file': cli_parsing('--output')}
