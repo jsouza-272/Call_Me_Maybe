@@ -132,25 +132,27 @@ class LlmInteface:
                 case ParameterState.PARAMETER:
                     if index in trie.children:
                         continue
-                    logits[index] = float("-inf")
                 case ParameterState.EQUAL:
                     if (index == self.__model.encode("=").squeeze().tolist()):
                         continue
-                    logits[index] = float("-inf")
                 case ParameterState.VALUENUMBER:
                     if (re.fullmatch(
-                        r"[\d .,]*", self.__model.decode([index])
-                        ) and index in self.__vocab
-                            or index == self.__end_key):
+                            r"[\d\s.,]*", self.__model.decode([index])
+                            )):
                         continue
-                    logits[index] = float("-inf")
                 case ParameterState.VALUESTRING:
                     if (re.fullmatch(
-                        r"[A-Za-z.,?!\\/\"\']", self.__model.decode([index])
-                        ) and index in self.__vocab
-                            or index == self.__end_key):
+                            r"[\sA-Za-z.,?!\\/\"\']",
+                            self.__model.decode([index])
+                            )):
                         continue
-                    logits[index] = float("-inf")
+                case ParameterState.END:
+                    if index == self.__end_key:
+                        continue
+                case ParameterState.SPACE:
+                    if index == self.__model.encode(" ").squeeze().tolist():
+                        continue
+            logits[index] = float("-inf")
 
     def _get_parameter_state(self, parameters: list,
                              func: FunctionDefition) -> ParameterState:
@@ -165,6 +167,10 @@ class LlmInteface:
         if all(param_type.type == "number"
                for param_type in func.parameters.values()):
             return ParameterState.VALUENUMBER
+        if decode_param.endswith("\n"):
+            return ParameterState.END
+        if decode_param.endswith(","):
+            return ParameterState.SPACE
         return ParameterState.VALUESTRING
 
     def _generate_parameters(self, tokenized_prompt: list,
@@ -195,7 +201,8 @@ class LlmInteface:
             if token in trie.children and not trie.is_end:
                 trie = trie.children[token]
             parameters.append(token)
-            print(self.__model.decode(parameters))
+            print(f"last token: {parameters[-1]} = {self.__model.decode(parameters[-1])}")
+            print(f"'{self.__model.decode(parameters)}'")
         return self.__model.decode(parameters)
 
     def _generate_answer(self, user_prompt: str) -> str:
@@ -223,19 +230,17 @@ class LlmInteface:
         tokenized_sys_prompt = self.__model.encode(
                 sys_prompt
                 ).squeeze().tolist()
-        tokenized_function_name = self.__model.encode(
-            function_answer + "\n"
-            ).squeeze().tolist()
         parameters_answer = self._generate_parameters(
                 tokenized_sys_prompt +
-                tokenized_user_prompt +
-                tokenized_function_name,
+                tokenized_user_prompt,
                 function_answer
                 )
         print(parameters_answer)
         return
 
     def genrate(self) -> str:
+        print(self.__model.encode(" "))
+        print(self.__model.encode("\n"))
         for p in self.__prompts:
             answer = self._generate_answer(p)
             return

@@ -6,3 +6,5 @@ class ParameterState(Enum):
     EQUAL = 1
     VALUENUMBER = 2
     VALUESTRING = 3
+    END = 4
+    SPACE = 5
