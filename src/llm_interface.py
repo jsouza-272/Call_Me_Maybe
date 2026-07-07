@@ -1,7 +1,7 @@
 from llm_sdk import Small_LLM_Model
 from typing import Literal
 from json import load
-from .models import FunctionDefition, Prompt
+from .models import FunctionDefition, Types, Prompt
 from .trie import Trie
 from .parsing import parsing
 from .states import ParameterState
@@ -22,13 +22,14 @@ class LlmInteface:
             f.name: f
             for f in infos["functions"]
             }
-        self.__prompts = infos.get("prompts")
+        self.__prompts: list[Prompt] = infos.get("prompts")
         self.__output: str = infos["output_file"]
         self.__temperature = temperature
         self.__model = Small_LLM_Model(model)
         if "Qwen3-0.6B" in model:
             end_key = self.__model.encode("<|im_end|>").squeeze().tolist()
-        self.__end_key = end_key
+        self.__end_key = (end_key if isinstance(end_key, list)
+                          else [end_key])
         with open(self.__model.get_path_to_vocab_file()) as file:
             self.__vocab = {v: k for k, v in load(file).items()}
         print("="*60, f"\nVOCAB_SIZE:{len(self.__vocab)}\n{'='*60}")
@@ -46,16 +47,21 @@ class LlmInteface:
 
     def _sys_prompt(self, mode: Literal['F', 'P']) -> str:
         if mode == PARAMETERS:
-            example = ('prompt: "What is the sum of 2 and 3?fn_add_numbers"\n'
-                       'assistant: a=2.0, b=3.0\n'
+            example = ('prompt: "What is the sum of 2 and 3?n_add_numbers"\n'
+                       'assistant: a=2.0,\nb=3.0\n'
                        'prompt: "Reverse the string \'hello\''
                        'fn_reverse_string\n'
                        'assistant: s=\'hello\'\n'
                        'prompt: "What is the square root of 16?'
                        'fn_get_square_root"\n'
-                       'assistant: a=16.0\n')
+                       'assistant: a=16.0\n'
+                       'promt: "Greet john'
+                       'ft_greet"\n'
+                       'assistant: name=jhon\n')
             sys_prompt = ("<|im_start|>system\n"
                           "/no_think\n"
+                          "Extract the parameter values "
+                          "from the user prompt.\n"
                           "Return only the paramaters of the funtion\n"
                           f"example: {example}\n"
                           "The functions you must use are the following: "
@@ -88,7 +94,7 @@ class LlmInteface:
     def _create_trie(self, tokens_list: list[list[int]]) -> Trie:
         root = Trie(-1)
         for tokens in tokens_list:
-            tokens.append(self.__end_key)
+            tokens.extend(self.__end_key)
             node = root
             for token in tokens:
                 if token not in node.children:
@@ -119,91 +125,98 @@ class LlmInteface:
             self._get_function_name(logits, trie)
             logits = self._softmax(logits)
             token = logits.index(max(logits))
-            if not trie.children or token == self.__end_key:
+            if not trie.children or token in self.__end_key:
                 break
             function_name.append(token)
             trie = trie.children[token]
         return self.__model.decode(function_name)
 
-    def _get_parameters(self, logits: list[float],
-                        state: ParameterState, trie: Trie) -> None:
+    def _get_param_value_number(self, logits: list[float],
+                                answer: str) -> None:
+        dot_in_answer = answer and "." in answer.splitlines()[-1]
+        tokenized_dot = [-1]
+        tokenized_comma = [-1]
+        if not dot_in_answer:
+            dot_token = self.__model.encode(".").squeeze().tolist()
+            tokenized_dot = (dot_token if isinstance(dot_token, list)
+                             else [dot_token])
+        if dot_in_answer:
+            comma_token = self.__model.encode(",").squeeze().tolist()
+            tokenized_comma = (comma_token if isinstance(comma_token, list)
+                               else [comma_token])
         for index in range(len(logits)):
-            match state:
-                case ParameterState.PARAMETER:
-                    if index in trie.children:
-                        continue
-                case ParameterState.EQUAL:
-                    if (index == self.__model.encode("=").squeeze().tolist()):
-                        continue
-                case ParameterState.VALUENUMBER:
-                    if (re.fullmatch(
-                            r"[\d\s.,]*", self.__model.decode([index])
-                            )):
-                        continue
-                case ParameterState.VALUESTRING:
-                    if (re.fullmatch(
-                            r"[\sA-Za-z.,?!\\/\"\']",
-                            self.__model.decode([index])
-                            )):
-                        continue
-                case ParameterState.END:
-                    if index == self.__end_key:
-                        continue
-                case ParameterState.SPACE:
-                    if index == self.__model.encode(" ").squeeze().tolist():
-                        continue
+            if (answer.endswith("\n")
+                    and index not in self.__end_key):
+                logits[index] = float("-inf")
+                continue
+            elif index in self.__end_key:
+                continue
+            elif not dot_in_answer and index in tokenized_dot:
+                continue
+            elif dot_in_answer and index in tokenized_comma:
+                continue
+            elif re.fullmatch(r"[\d\n]*", self.__model.decode([index])):
+                continue
             logits[index] = float("-inf")
 
-    def _get_parameter_state(self, parameters: list,
-                             func: FunctionDefition) -> ParameterState:
-        if not parameters:
-            return ParameterState.PARAMETER
-        decode_param = self.__model.decode(parameters)
-        if decode_param.endswith(', '):
-            return ParameterState.PARAMETER
-        if (decode_param.split()[-1] in func.parameters
-                and not decode_param.endswith('=')):
-            return ParameterState.EQUAL
-        if all(param_type.type == "number"
-               for param_type in func.parameters.values()):
-            return ParameterState.VALUENUMBER
-        if decode_param.endswith("\n"):
-            return ParameterState.END
-        if decode_param.endswith(","):
-            return ParameterState.SPACE
-        return ParameterState.VALUESTRING
+    def _get_param_value_string(self, logits: list[float],
+                                answer: str) -> None:
+        for index in range(len(logits)):
+            if (answer.endswith("\n")
+                    and index not in self.__end_key):
+                logits[index] = float("-inf")
+                continue
+            elif index in self.__end_key:
+                continue
+            elif re.fullmatch(r"[\w\s\\\.\,\"\']*",
+                              self.__model.decode([index])):
+                continue
+            logits[index] = float("-inf")
+
+    def _get_param_value(self, tokenized_prompt: list[int],
+                         param: str, param_type: Types) -> str:
+        tokenized_param = self.__model.encode(param).squeeze().tolist()
+        while True:
+            logits = self.__model.get_logits_from_input_ids(
+                tokenized_prompt + tokenized_param
+            )
+            if param_type.type == "number":
+                self._get_param_value_number(
+                    logits,
+                    self.__model.decode(tokenized_param)
+                )
+            elif param_type.type == "string":
+                self._get_param_value_string(
+                    logits,
+                    self.__model.decode(tokenized_param))
+            logits = self._softmax(logits)
+            token = logits.index(max(logits))
+            if token in self.__end_key:
+                break
+            tokenized_param.append(token)
+        return self.__model.decode(tokenized_param)
 
     def _generate_parameters(self, tokenized_prompt: list,
                              function_name: str) -> str:
-        list_parameter = []
-        for param in self.__functions[function_name].parameters:
-            tokenized_param = self.__model.encode(param).squeeze().tolist()
-            if not isinstance(tokenized_param, list):
-                tokenized_param = [tokenized_param]
-            list_parameter.append(tokenized_param)
-        trie = self._create_trie(list_parameter)
-        parameters = list()
-        while True:
-            logits = self.__model.get_logits_from_input_ids(
-                tokenized_prompt + parameters
+        parameters = ""
+        parameters_name = list(
+            self.__functions[function_name].parameters.keys()
             )
-            state = self._get_parameter_state(
+        for param_name in parameters_name:
+            parameters += param_name + "="
+            parameters = self._get_param_value(
+                tokenized_prompt,
                 parameters,
-                self.__functions[function_name]
-            )
-            print(state)
-            self._get_parameters(logits, state, trie)
-            logits = self._softmax(logits)
-            token = logits.index(max(logits))
-            if token == self.__end_key:
-                print(f'end: {self.__model.decode(parameters)}')
-                break
-            if token in trie.children and not trie.is_end:
-                trie = trie.children[token]
-            parameters.append(token)
-            print(f"last token: {parameters[-1]} = {self.__model.decode(parameters[-1])}")
-            print(f"'{self.__model.decode(parameters)}'")
-        return self.__model.decode(parameters)
+                self.__functions[function_name].parameters[param_name])
+        return parameters
+
+    def _check_prompt(self, prompt: str, func: str) -> bool:
+        if self.__functions[func].returns.type == "number":
+            if not re.search(r"\d+\.?\d*", prompt):
+                return False
+        return True
+
+    def _build_json(self, function_name: str, parameters: str)
 
     def _generate_answer(self, user_prompt: str) -> str:
         sys_prompt = self._sys_prompt(FUNCTION)
@@ -218,7 +231,10 @@ class LlmInteface:
         function_answer = self._generate_function(
             tokenized_sys_prompt + tokenized_user_prompt
             )
-        print(function_answer)
+        print("func:", function_answer)
+
+        if not self._check_prompt(user_prompt, function_answer):
+            raise ValueError("CADE!!!!!!!!!")
 
         formated_user_prompt = self._format_prompt(
             user_prompt, function_answer
@@ -235,12 +251,11 @@ class LlmInteface:
                 tokenized_user_prompt,
                 function_answer
                 )
-        print(parameters_answer)
-        return
+        print('params:', parameters_answer)
+        return self._build_json(function_answer, parameters_answer)
 
     def genrate(self) -> str:
-        print(self.__model.encode(" "))
-        print(self.__model.encode("\n"))
         for p in self.__prompts:
-            answer = self._generate_answer(p)
-            return
+            print(p)
+            answer = self._generate_answer(f"{p!r}")
+        return
