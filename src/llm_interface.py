@@ -4,18 +4,16 @@ from json import load
 from .models import FunctionDefition, Types, Prompt
 from .trie import Trie
 from .parsing import parsing
-from .states import ParameterState
 import math
 import re
-import sys
 
 
 FUNCTION = 'F'
 PARAMETERS = 'P'
 BASIC_REGEX = [".", "^", "$", "*", "+", "?", "|",
                "(", ")", "[", "]", "{", "}", "\\",
-               r"\d", r"\D", r"\w", r"\W", r"\s",
-               r"\S", r"\b", r"\B"]
+               r"\d", r"\D", r"\w", r"\W", r"\s", r"\S",
+               r"\b", r"\B"]
 
 
 class LlmInteface:
@@ -55,9 +53,13 @@ class LlmInteface:
                        'prompt: "Reverse the string \'hello\''
                        'fn_reverse_string\n'
                        'assistant: s=\'hello\'\n'
-                       'prompt: "What is the square root of 16?'
-                       'fn_get_square_root"\n'
-                       'assistant: a=16.0\n'
+                       'prompt: "Replace all numbers in \"Hello 34 I\'m 233 '
+                       'years old\" with NUMBERS.'
+                       'fn_substitute_string_with_regex"\n'
+                       'assistant: '
+                       'source_string=\"Hello 34 I\'m 233 years old\",\n'
+                       'regex="\\d+",\n'
+                       'replacement="NUMBERS"\n'
                        'promt: "Greet john'
                        'ft_greet"\n'
                        'assistant: name=jhon\n')
@@ -180,8 +182,8 @@ class LlmInteface:
                 continue
             elif index == self.__end_key:
                 continue
-            elif not regex and re.fullmatch(r"[\w\s\\\.\,\"\']*",
-                                            self.__model.decode([index])):
+            elif re.fullmatch(r"[\w\s\\\.\,\"\']*",
+                              self.__model.decode([index])):
                 continue
             logits[index] = float("-inf")
 
@@ -193,6 +195,7 @@ class LlmInteface:
             regex_trie = self._create_trie([self.__model.encode(
                 reg
                 ).squeeze().tolist() for reg in BASIC_REGEX])
+            root = regex_trie
         while True:
             logits = self.__model.get_logits_from_input_ids(
                 tokenized_prompt + tokenized_param
@@ -212,9 +215,12 @@ class LlmInteface:
             token = logits.index(max(logits))
             if token == self.__end_key:
                 break
-            if regex_trie and token in regex_trie.children:
-                regex_trie = regex_trie.children[token]
             tokenized_param.append(token)
+            if (regex_trie and token in regex_trie.children
+                    and self.__end_key not in regex_trie.children):
+                regex_trie = regex_trie.children[token]
+            elif regex_trie and self.__end_key in regex_trie.children:
+                regex_trie = root
             print(self.__model.decode(tokenized_param))
         return self.__model.decode(tokenized_param)
 
