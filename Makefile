@@ -5,11 +5,9 @@ endif
 
 run:
 	clear
-	uv build llm_sdk
 	uv sync
 	uv run python3 -m src --input data/input/string_prompts.json
 test:
 	clear
-	uv build llm_sdk
 	uv sync
 	uv run python3 src/.test.py

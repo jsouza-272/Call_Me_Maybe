@@ -25,4 +25,4 @@ extend-exclude = [
 exclude = ["llm_sdk/"]
 
 [tool.uv.sources]
-llm-sdk = { path = "llm_sdk/dist/llm_sdk-0.1.0-py3-none-any.whl" }
+llm-sdk = { path = "llm_sdk/" , editable = true }

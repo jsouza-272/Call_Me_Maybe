@@ -12,6 +12,10 @@ import sys
 
 FUNCTION = 'F'
 PARAMETERS = 'P'
+BASIC_REGEX = [".", "^", "$", "*", "+", "?", "|",
+               "(", ")", "[", "]", "{", "}", "\\",
+               r"\d", r"\D", r"\w", r"\W", r"\s",
+               r"\S", r"\b", r"\B"]
 
 
 class LlmInteface:
@@ -28,8 +32,7 @@ class LlmInteface:
         self.__model = Small_LLM_Model(model)
         if "Qwen3-0.6B" in model:
             end_key = self.__model.encode("<|im_end|>").squeeze().tolist()
-        self.__end_key = (end_key if isinstance(end_key, list)
-                          else [end_key])
+        self.__end_key = end_key
         with open(self.__model.get_path_to_vocab_file()) as file:
             self.__vocab = {v: k for k, v in load(file).items()}
         print("="*60, f"\nVOCAB_SIZE:{len(self.__vocab)}\n{'='*60}")
@@ -58,6 +61,7 @@ class LlmInteface:
                        'promt: "Greet john'
                        'ft_greet"\n'
                        'assistant: name=jhon\n')
+
             sys_prompt = ("<|im_start|>system\n"
                           "/no_think\n"
                           "Extract the parameter values "
@@ -94,10 +98,16 @@ class LlmInteface:
     def _create_trie(self, tokens_list: list[list[int]]) -> Trie:
         root = Trie(-1)
         for tokens in tokens_list:
-            tokens.extend(self.__end_key)
+            if isinstance(tokens, list):
+                tokens.append(self.__end_key)
+            else:
+                tokens = [tokens, self.__end_key]
             node = root
             for token in tokens:
-                if token not in node.children:
+                if (isinstance(token, list)
+                        and all(t not in node.children for t in token)):
+                    node.add_children(Trie(token))
+                elif token not in node.children:
                     node.add_children(Trie(token))
                 node = node.children[token]
             node.is_end = True
@@ -125,7 +135,7 @@ class LlmInteface:
             self._get_function_name(logits, trie)
             logits = self._softmax(logits)
             token = logits.index(max(logits))
-            if not trie.children or token in self.__end_key:
+            if not trie.children or token == self.__end_key:
                 break
             function_name.append(token)
             trie = trie.children[token]
@@ -146,10 +156,10 @@ class LlmInteface:
                                else [comma_token])
         for index in range(len(logits)):
             if (answer.endswith("\n")
-                    and index not in self.__end_key):
+                    and index == self.__end_key):
                 logits[index] = float("-inf")
                 continue
-            elif index in self.__end_key:
+            elif index == self.__end_key:
                 continue
             elif not dot_in_answer and index in tokenized_dot:
                 continue
@@ -160,22 +170,29 @@ class LlmInteface:
             logits[index] = float("-inf")
 
     def _get_param_value_string(self, logits: list[float],
-                                answer: str) -> None:
+                                answer: str, regex: Trie | None) -> None:
         for index in range(len(logits)):
             if (answer.endswith("\n")
-                    and index not in self.__end_key):
+                    and not index == self.__end_key):
                 logits[index] = float("-inf")
                 continue
-            elif index in self.__end_key:
+            elif regex and index in regex.children:
                 continue
-            elif re.fullmatch(r"[\w\s\\\.\,\"\']*",
-                              self.__model.decode([index])):
+            elif index == self.__end_key:
+                continue
+            elif not regex and re.fullmatch(r"[\w\s\\\.\,\"\']*",
+                                            self.__model.decode([index])):
                 continue
             logits[index] = float("-inf")
 
     def _get_param_value(self, tokenized_prompt: list[int],
-                         param: str, param_type: Types) -> str:
+                         param: str, param_type: Types, regex: bool) -> str:
         tokenized_param = self.__model.encode(param).squeeze().tolist()
+        regex_trie = None
+        if regex and param_type.type == "string":
+            regex_trie = self._create_trie([self.__model.encode(
+                reg
+                ).squeeze().tolist() for reg in BASIC_REGEX])
         while True:
             logits = self.__model.get_logits_from_input_ids(
                 tokenized_prompt + tokenized_param
@@ -188,12 +205,17 @@ class LlmInteface:
             elif param_type.type == "string":
                 self._get_param_value_string(
                     logits,
-                    self.__model.decode(tokenized_param))
+                    self.__model.decode(tokenized_param),
+                    regex_trie
+                    )
             logits = self._softmax(logits)
             token = logits.index(max(logits))
-            if token in self.__end_key:
+            if token == self.__end_key:
                 break
+            if regex_trie and token in regex_trie.children:
+                regex_trie = regex_trie.children[token]
             tokenized_param.append(token)
+            print(self.__model.decode(tokenized_param))
         return self.__model.decode(tokenized_param)
 
     def _generate_parameters(self, tokenized_prompt: list,
@@ -207,7 +229,8 @@ class LlmInteface:
             parameters = self._get_param_value(
                 tokenized_prompt,
                 parameters,
-                self.__functions[function_name].parameters[param_name])
+                self.__functions[function_name].parameters[param_name],
+                param_name == "regex")
         return parameters
 
     def _check_prompt(self, prompt: str, func: str) -> bool:
@@ -216,7 +239,8 @@ class LlmInteface:
                 return False
         return True
 
-    def _build_json(self, function_name: str, parameters: str)
+    def _build_json(self, function_name: str, parameters: str):
+        pass
 
     def _generate_answer(self, user_prompt: str) -> str:
         sys_prompt = self._sys_prompt(FUNCTION)
@@ -252,7 +276,7 @@ class LlmInteface:
                 function_answer
                 )
         print('params:', parameters_answer)
-        return self._build_json(function_answer, parameters_answer)
+        #return self._build_json(function_answer, parameters_answer)
 
     def genrate(self) -> str:
         for p in self.__prompts:
