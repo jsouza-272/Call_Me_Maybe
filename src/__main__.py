@@ -8,7 +8,7 @@ TOKEN_LIMIT = 1000
 try:
     if __name__ == "__main__":
         llm = LlmInteface()
-        llm.genrate()
+        llm.save_json(llm.genrate())
 
         # ===========================
         #llm = Small_LLM_Model()

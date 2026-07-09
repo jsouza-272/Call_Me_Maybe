@@ -1,11 +1,12 @@
 from llm_sdk import Small_LLM_Model
 from typing import Literal
-from json import load
+from json import load, dump
 from .models import FunctionDefition, Types, Prompt
 from .trie import Trie
 from .parsing import parsing
 import math
 import re
+import os
 
 
 FUNCTION = 'F'
@@ -221,7 +222,6 @@ class LlmInteface:
                 regex_trie = regex_trie.children[token]
             elif regex_trie and self.__end_key in regex_trie.children:
                 regex_trie = root
-            print(self.__model.decode(tokenized_param))
         return self.__model.decode(tokenized_param)
 
     def _generate_parameters(self, tokenized_prompt: list,
@@ -245,10 +245,17 @@ class LlmInteface:
                 return False
         return True
 
-    def _build_json(self, function_name: str, parameters: str):
-        pass
+    def _build_json(self, function_name: str,
+                    parameters: str) -> dict[str, str]:
+        split_parameters = parameters.splitlines()
+        formated_answer = {"name": function_name,
+                           "parameters": {
+                               param.split("=", 1)[0]: param.split(
+                                   "=", 1)[1].strip().strip("\"")
+                               for param in split_parameters}}
+        return formated_answer
 
-    def _generate_answer(self, user_prompt: str) -> str:
+    def _generate_answer(self, user_prompt: str) -> dict[str, str]:
         sys_prompt = self._sys_prompt(FUNCTION)
         formated_user_prompt = self._format_prompt(user_prompt)
         tokenized_user_prompt = self.__model.encode(
@@ -261,7 +268,6 @@ class LlmInteface:
         function_answer = self._generate_function(
             tokenized_sys_prompt + tokenized_user_prompt
             )
-        print("func:", function_answer)
 
         if not self._check_prompt(user_prompt, function_answer):
             raise ValueError("CADE!!!!!!!!!")
@@ -281,11 +287,19 @@ class LlmInteface:
                 tokenized_user_prompt,
                 function_answer
                 )
-        print('params:', parameters_answer)
-        #return self._build_json(function_answer, parameters_answer)
+        return self._build_json(function_answer, parameters_answer)
 
-    def genrate(self) -> str:
+    def genrate(self) -> list[dict[str, str]]:
+        answer_list = []
         for p in self.__prompts:
             print(p)
-            answer = self._generate_answer(f"{p!r}")
-        return
+            answer = {"prompt": f"{p!r}"}
+            answer.update(self._generate_answer(f"{p!r}"))
+            answer_list.append(answer)
+        return answer_list
+
+    def save_json(self, obj: list[dict[str, str]]) -> None:
+        output_path = "".join(d + "/" for d in self.__output.split("/")[:-1])
+        os.makedirs(output_path, exist_ok=True)
+        with open(self.__output, "w", encoding="utf-8") as file:
+            dump(obj, file, ensure_ascii=False, indent=4)

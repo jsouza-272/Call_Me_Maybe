@@ -1,4 +1,6 @@
-from llm_sdk import Small_LLM_Model
+import json
 
-model = Small_LLM_Model()
-print(model.encode(r"\d").squeeze().tolist())
+test = [{"prompt": "casas", "rua": "lua"}]
+
+with open("test.json", "x+") as file:
+    json.dump(test, file, ensure_ascii=False, indent=4)
