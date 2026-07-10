@@ -1,5 +1,5 @@
 from llm_sdk import Small_LLM_Model
-from typing import Literal
+from typing import Literal, Any
 from json import load, dump
 from .models import FunctionDefition, Types, Prompt
 from .trie import Trie
@@ -7,14 +7,14 @@ from .parsing import parsing
 import math
 import re
 import os
+from accelerate import Accelerator
 
 
 FUNCTION = 'F'
 PARAMETERS = 'P'
 BASIC_REGEX = [".", "^", "$", "*", "+", "?", "|",
-               "(", ")", "[", "]", "{", "}", "\\",
-               r"\d", r"\D", r"\w", r"\W", r"\s", r"\S",
-               r"\b", r"\B"]
+               "[", "]", r"\d", r"\D", r"\w",
+               r"\W", r"\s", r"\S", r"\b", r"\B"]
 
 
 class LlmInteface:
@@ -28,13 +28,16 @@ class LlmInteface:
         self.__prompts: list[Prompt] = infos.get("prompts")
         self.__output: str = infos["output_file"]
         self.__temperature = temperature
-        self.__model = Small_LLM_Model(model)
+        self.__model = Small_LLM_Model(model, device=Accelerator().device)
         if "Qwen3-0.6B" in model:
             end_key = self.__model.encode("<|im_end|>").squeeze().tolist()
         self.__end_key = end_key
         with open(self.__model.get_path_to_vocab_file()) as file:
             self.__vocab = {v: k for k, v in load(file).items()}
-        print("="*60, f"\nVOCAB_SIZE:{len(self.__vocab)}\n{'='*60}")
+        print("="*60)
+        print(f"model: {model}")
+        print(f"VOCAB_SIZE:{len(self.__vocab)}")
+        print("="*60)
 
     def _format_prompt(self, prompt: str,
                        function_answer: str = "") -> list[str]:
@@ -53,14 +56,14 @@ class LlmInteface:
                        'assistant: a=2.0,\nb=3.0\n'
                        'prompt: "Reverse the string \'hello\''
                        'fn_reverse_string\n'
-                       'assistant: s=\'hello\'\n'
+                       'assistant: s=hello\n'
                        'prompt: "Replace all numbers in \"Hello 34 I\'m 233 '
                        'years old\" with NUMBERS.'
                        'fn_substitute_string_with_regex"\n'
                        'assistant: '
-                       'source_string=\"Hello 34 I\'m 233 years old\",\n'
-                       'regex="\\d+",\n'
-                       'replacement="NUMBERS"\n'
+                       "source_string=Hello 34 I'm 233 years old,\n"
+                       'regex=\\d+,\n'
+                       'replacement=NUMBERS\n'
                        'promt: "Greet john'
                        'ft_greet"\n'
                        'assistant: name=jhon\n')
@@ -98,13 +101,12 @@ class LlmInteface:
         logits_sum = 1 if not logits_sum else logits_sum
         return [logit / logits_sum for logit in new]
 
-    def _create_trie(self, tokens_list: list[list[int]]) -> Trie:
+    def _create_trie(self, tokens_list: list[list[int]],
+                     end_key: bool = False) -> Trie:
         root = Trie(-1)
         for tokens in tokens_list:
-            if isinstance(tokens, list):
+            if end_key:
                 tokens.append(self.__end_key)
-            else:
-                tokens = [tokens, self.__end_key]
             node = root
             for token in tokens:
                 if (isinstance(token, list)
@@ -129,7 +131,8 @@ class LlmInteface:
     def _generate_function(self, tokenized_prompt: list) -> str:
         trie = self._create_trie([self.__model.encode(
             func.name
-            ).squeeze().tolist() for func in self.__functions.values()])
+            ).tolist()[0] for func in self.__functions.values()],
+            True)
         function_name = list()
         while True:
             logits = self.__model.get_logits_from_input_ids(
@@ -150,16 +153,12 @@ class LlmInteface:
         tokenized_dot = [-1]
         tokenized_comma = [-1]
         if not dot_in_answer:
-            dot_token = self.__model.encode(".").squeeze().tolist()
-            tokenized_dot = (dot_token if isinstance(dot_token, list)
-                             else [dot_token])
+            tokenized_dot = self.__model.encode(".").tolist()[0]
         if dot_in_answer:
-            comma_token = self.__model.encode(",").squeeze().tolist()
-            tokenized_comma = (comma_token if isinstance(comma_token, list)
-                               else [comma_token])
+            tokenized_comma = self.__model.encode(",").tolist()[0]
         for index in range(len(logits)):
             if (answer.endswith("\n")
-                    and index == self.__end_key):
+                    and not index == self.__end_key):
                 logits[index] = float("-inf")
                 continue
             elif index == self.__end_key:
@@ -173,30 +172,29 @@ class LlmInteface:
             logits[index] = float("-inf")
 
     def _get_param_value_string(self, logits: list[float],
-                                answer: str, regex: Trie | None) -> None:
+                                answer: str, regex: bool) -> None:
+        newline = not answer.splitlines()[-1].endswith("=")
         for index in range(len(logits)):
             if (answer.endswith("\n")
                     and not index == self.__end_key):
                 logits[index] = float("-inf")
                 continue
-            elif regex and index in regex.children:
-                continue
             elif index == self.__end_key:
                 continue
-            elif re.fullmatch(r"[\w\s\\\.\,\"\']*",
-                              self.__model.decode([index])):
+            elif newline and re.fullmatch(r"[,\n]*",
+                                          self.__model.decode([index])):
+                continue
+            elif regex and re.fullmatch(r"\\[dDwWsSbB]",
+                                        self.__model.decode([index])):
+                continue
+            elif not regex and re.fullmatch(r"[\w\s.,']+",
+                                            self.__model.decode([index])):
                 continue
             logits[index] = float("-inf")
 
     def _get_param_value(self, tokenized_prompt: list[int],
                          param: str, param_type: Types, regex: bool) -> str:
-        tokenized_param = self.__model.encode(param).squeeze().tolist()
-        regex_trie = None
-        if regex and param_type.type == "string":
-            regex_trie = self._create_trie([self.__model.encode(
-                reg
-                ).squeeze().tolist() for reg in BASIC_REGEX])
-            root = regex_trie
+        tokenized_param = self.__model.encode(param).tolist()[0]
         while True:
             logits = self.__model.get_logits_from_input_ids(
                 tokenized_prompt + tokenized_param
@@ -210,18 +208,14 @@ class LlmInteface:
                 self._get_param_value_string(
                     logits,
                     self.__model.decode(tokenized_param),
-                    regex_trie
+                    regex
                     )
             logits = self._softmax(logits)
             token = logits.index(max(logits))
             if token == self.__end_key:
                 break
             tokenized_param.append(token)
-            if (regex_trie and token in regex_trie.children
-                    and self.__end_key not in regex_trie.children):
-                regex_trie = regex_trie.children[token]
-            elif regex_trie and self.__end_key in regex_trie.children:
-                regex_trie = root
+            print(self.__model.decode(tokenized_param))
         return self.__model.decode(tokenized_param)
 
     def _generate_parameters(self, tokenized_prompt: list,
@@ -232,6 +226,7 @@ class LlmInteface:
             )
         for param_name in parameters_name:
             parameters += param_name + "="
+            print("\nparam_name:", param_name)
             parameters = self._get_param_value(
                 tokenized_prompt,
                 parameters,
@@ -246,24 +241,24 @@ class LlmInteface:
         return True
 
     def _build_json(self, function_name: str,
-                    parameters: str) -> dict[str, str]:
+                    parameters: str) -> dict[str, Any]:
         split_parameters = parameters.splitlines()
         formated_answer = {"name": function_name,
                            "parameters": {
                                param.split("=", 1)[0]: param.split(
-                                   "=", 1)[1].strip().strip("\"")
+                                   "=", 1)[1].strip().strip(",")
                                for param in split_parameters}}
         return formated_answer
 
-    def _generate_answer(self, user_prompt: str) -> dict[str, str]:
+    def _generate_answer(self, user_prompt: str) -> dict[str, Any]:
         sys_prompt = self._sys_prompt(FUNCTION)
         formated_user_prompt = self._format_prompt(user_prompt)
         tokenized_user_prompt = self.__model.encode(
             formated_user_prompt
-        ).squeeze().tolist()
+        ).tolist()[0]
         tokenized_sys_prompt = self.__model.encode(
             sys_prompt
-            ).squeeze().tolist()
+            ).tolist()[0]
 
         function_answer = self._generate_function(
             tokenized_sys_prompt + tokenized_user_prompt
@@ -277,11 +272,11 @@ class LlmInteface:
         )
         tokenized_user_prompt = self.__model.encode(
             formated_user_prompt
-        ).squeeze().tolist()
+        ).tolist()[0]
         sys_prompt = self._sys_prompt(PARAMETERS)
         tokenized_sys_prompt = self.__model.encode(
                 sys_prompt
-                ).squeeze().tolist()
+                ).tolist()[0]
         parameters_answer = self._generate_parameters(
                 tokenized_sys_prompt +
                 tokenized_user_prompt,

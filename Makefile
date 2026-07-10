@@ -6,8 +6,15 @@ endif
 run:
 	clear
 	uv sync
-	uv run python3 -m src --input data/input/string_prompts.json
+	uv run python3 -m src
 test:
 	clear
 	uv sync
 	uv run python3 src/.test.py
+
+lint:
+	clear
+	uv run flake8
+	uv run mypy .
+
+.PHONY: lint
