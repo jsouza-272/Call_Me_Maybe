@@ -73,6 +73,14 @@ class LlmInteface:
                           "Extract the parameter values "
                           "from the user prompt.\n"
                           "Return only the paramaters of the funtion\n"
+                          "Regex rules: use the shortest pattern that "
+                          "matches only the target substring(s).\n"
+                          "Never repeat the same group or subpattern"
+                          " multiple times.\n"
+                          "Never prefix/suffix the pattern with .*, .*?,"
+                          " ^, $ or any surrounding context — match ONLY"
+                          " the target itself.\n"
+                          "One pass is always enough, like regex=\\d+.\n"
                           f"example: {example}\n"
                           "The functions you must use are the following: "
                           f"{list(self.__functions.values())!r}.\n"
@@ -174,21 +182,33 @@ class LlmInteface:
     def _get_param_value_string(self, logits: list[float],
                                 answer: str, regex: bool) -> None:
         newline = not answer.splitlines()[-1].endswith("=")
+        current_value = answer.splitlines()[-1].split("=")[-1]
+        has_escape = bool(re.search(r"\\\w", current_value))
+        has_group = current_value.count("(") >= 1
         for index in range(len(logits)):
+            token = self.__model.decode([index])
             if (answer.endswith("\n")
                     and not index == self.__end_key):
                 logits[index] = float("-inf")
                 continue
             elif index == self.__end_key:
                 continue
-            elif newline and re.fullmatch(r"[,\n]*",
-                                          self.__model.decode([index])):
+            elif (regex and current_value == ""
+                    and re.fullmatch(r"[.^*+?]\S*", token)):
+                logits[index] = float("-inf")
                 continue
-            elif regex and re.fullmatch(r"\\[dDwWsSbB]",
-                                        self.__model.decode([index])):
+            elif regex and has_escape and re.fullmatch(r"\\\w", token):
+                logits[index] = float("-inf")
                 continue
-            elif not regex and re.fullmatch(r"[\w\s.,']+",
-                                            self.__model.decode([index])):
+            elif regex and has_group and "(" in token:
+                logits[index] = float("-inf")
+                continue
+            elif newline and re.fullmatch(r"[,\n]*", token):
+                continue
+            elif regex and re.fullmatch(
+                    r"\\\w|[\w\s+*?.\[\]()^$'-]+", token):
+                continue
+            elif not regex and re.fullmatch(r"[\w\s.,*']+", token):
                 continue
             logits[index] = float("-inf")
 
