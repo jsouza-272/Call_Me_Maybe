@@ -22,8 +22,9 @@ extend-exclude = [
 	"llm_sdk"
 ]
 
-[tool.mypy]
-exclude = ["llm_sdk/"]
+[[tool.mypy.overrides]]
+module = ["llm_sdk", "llm_sdk.*"]
+ignore_errors = true
 
 [tool.uv.sources]
 llm-sdk = { path = "llm_sdk/" , editable = true }

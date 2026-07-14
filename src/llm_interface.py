@@ -1,17 +1,19 @@
-from llm_sdk import Small_LLM_Model
-from typing import Literal, Any
-from json import load, dump
-from .models import FunctionDefition, Types, Prompt
-from .trie import Trie
-from .parsing import parsing
 import math
 import re
 import os
+
+from llm_sdk import Small_LLM_Model
 from accelerate import Accelerator
+from typing import Literal, Any
+from json import load, dump
+
+from .trie import Trie
+from .parsing import parsing
+from .models import FunctionDefition, Types, Prompt
 
 
-FUNCTION = 'F'
-PARAMETERS = 'P'
+FUNCTION: Literal['F'] = 'F'
+PARAMETERS: Literal['P'] = 'P'
 BASIC_REGEX = [".", "^", "$", "*", "+", "?", "|",
                "[", "]", r"\d", r"\D", r"\w",
                r"\W", r"\s", r"\S", r"\b", r"\B"]
@@ -30,8 +32,8 @@ class LlmInteface:
         self.__temperature = temperature
         self.__model = Small_LLM_Model(model, device=Accelerator().device)
         if "Qwen3-0.6B" in model:
-            end_key = self.__model.encode("<|im_end|>").squeeze().tolist()
-        self.__end_key = end_key
+            end_key = self.__model.encode("<|im_end|>").tolist()[0][0]
+        self.__end_key: int = end_key
         with open(self.__model.get_path_to_vocab_file()) as file:
             self.__vocab = {v: k for k, v in load(file).items()}
         print("="*60)
@@ -40,7 +42,7 @@ class LlmInteface:
         print("="*60)
 
     def _format_prompt(self, prompt: str,
-                       function_answer: str = "") -> list[str]:
+                       function_answer: str = "") -> str:
         if not function_answer:
             prompt = (f"<|im_start|>user\n{prompt!r}<|im_end|>"
                       "<|im_start|>assistant\n")
@@ -141,7 +143,7 @@ class LlmInteface:
             func.name
             ).tolist()[0] for func in self.__functions.values()],
             True)
-        function_name = list()
+        function_name: list = list()
         while True:
             logits = self.__model.get_logits_from_input_ids(
                 tokenized_prompt + function_name
@@ -170,6 +172,9 @@ class LlmInteface:
                 logits[index] = float("-inf")
                 continue
             elif index == self.__end_key:
+                continue
+            elif index not in self.__vocab:
+                logits[index] = float("-inf")
                 continue
             elif not dot_in_answer and index in tokenized_dot:
                 continue
@@ -208,7 +213,9 @@ class LlmInteface:
             elif regex and re.fullmatch(
                     r"\\\w|[\w\s+*?.\[\]()^$'-]+", token):
                 continue
-            elif not regex and re.fullmatch(r"[\w\s.,*']+", token):
+            elif not regex and re.fullmatch(
+                r"[\w\s.,*\\\/{}\[\]():;\"'+=-_]+",
+                token):
                 continue
             logits[index] = float("-inf")
 
@@ -219,7 +226,7 @@ class LlmInteface:
             logits = self.__model.get_logits_from_input_ids(
                 tokenized_prompt + tokenized_param
             )
-            if param_type.type == "number":
+            if param_type.type in ("number", "integer", "float"):
                 self._get_param_value_number(
                     logits,
                     self.__model.decode(tokenized_param)
@@ -267,6 +274,10 @@ class LlmInteface:
                            "parameters": {
                                param.split("=", 1)[0]: param.split(
                                    "=", 1)[1].strip().strip(",")
+                               if not param.split("=", 1)[1].strip(
+                                   ).strip(",").isdigit()
+                               else float(param.split(
+                                   "=", 1)[1].strip().strip(","))
                                for param in split_parameters}}
         return formated_answer
 

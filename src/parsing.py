@@ -1,4 +1,5 @@
 import sys
+from typing import TypedDict
 from json import load, JSONDecodeError
 from pydantic import ValidationError
 from .models import FunctionDefition, Prompt
@@ -7,6 +8,12 @@ from .errors import ParsingError
 DEFAULT_PATHS = {'func_file': 'data/input/functions_definition.json',
                  'input_file': 'data/input/function_calling_tests.json',
                  'output_file': 'data/output/function_calling_results.json'}
+
+
+class ParsingResult(TypedDict):
+    output_file: str
+    functions: list[FunctionDefition]
+    prompts: list[Prompt]
 
 
 def cli_parsing(flag: str) -> str:
@@ -22,7 +29,7 @@ def cli_parsing(flag: str) -> str:
     return sys.argv[index + 1]
 
 
-def parsing() -> dict[str, list[FunctionDefition] | list[Prompt] | str]:
+def parsing() -> ParsingResult:
     flags = {'func_file': cli_parsing('--functions_definition'),
              'input_file': cli_parsing('--input'),
              'output_file': cli_parsing('--output')}
@@ -36,10 +43,10 @@ def parsing() -> dict[str, list[FunctionDefition] | list[Prompt] | str]:
             except JSONDecodeError as e:
                 raise ParsingError(f"Invalid JSON in '{flags['func_file']}':"
                                    f"line {e.lineno}, column {e.colno}")
-            except ValidationError:
+            except ValidationError as e:
                 raise ParsingError("Invalid file format: "
                                    f"'{flags['func_file']}' contains invalid "
-                                   "or missing fields")
+                                   "or missing fields", e)
 
         with open(flags['input_file']) as file:
             try:
