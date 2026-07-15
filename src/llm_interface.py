@@ -214,14 +214,23 @@ class LlmInteface:
                     r"\\\w|[\w\s+*?.\[\]()^$'-]+", token):
                 continue
             elif not regex and re.fullmatch(
-                r"[\w\s.,*\\\/{}\[\]():;\"'+=-_]+",
-                token):
+                r"[\w\s.,*\\\/{}\[\]():;'+=-_!?]+",
+                    token):
+                continue
+            logits[index] = float("-inf")
+
+    def _get_param_value_boolean(self, logits: list[float],
+                                 trie: Trie) -> None:
+        for index in range(len(logits)):
+            if index in trie.children:
                 continue
             logits[index] = float("-inf")
 
     def _get_param_value(self, tokenized_prompt: list[int],
                          param: str, param_type: Types, regex: bool) -> str:
         tokenized_param = self.__model.encode(param).tolist()[0]
+        boolean_trie = self._create_trie([self.__model.encode(tf).tolist()[0]
+                                          for tf in ["true", "false"]])
         while True:
             logits = self.__model.get_logits_from_input_ids(
                 tokenized_prompt + tokenized_param
@@ -237,10 +246,14 @@ class LlmInteface:
                     self.__model.decode(tokenized_param),
                     regex
                     )
+            elif param_type.type == "boolean":
+                self._get_param_value_boolean(logits, boolean_trie)
             logits = self._softmax(logits)
             token = logits.index(max(logits))
             if token == self.__end_key:
                 break
+            if token in boolean_trie.children:
+                boolean_trie = boolean_trie.children[token]
             tokenized_param.append(token)
             print(self.__model.decode(tokenized_param))
         return self.__model.decode(tokenized_param)
@@ -270,15 +283,22 @@ class LlmInteface:
     def _build_json(self, function_name: str,
                     parameters: str) -> dict[str, Any]:
         split_parameters = parameters.splitlines()
-        formated_answer = {"name": function_name,
-                           "parameters": {
-                               param.split("=", 1)[0]: param.split(
-                                   "=", 1)[1].strip().strip(",")
-                               if not param.split("=", 1)[1].strip(
-                                   ).strip(",").isdigit()
-                               else float(param.split(
-                                   "=", 1)[1].strip().strip(","))
-                               for param in split_parameters}}
+        formated_answer: dict[str, Any] = {"name": function_name}
+        parameters_dict: dict[str, Any] = {}
+        for param in split_parameters:
+            param_name = param.split("=", 1)[0]
+            param_value = param.split("=", 1)[1].strip().strip(",")
+            param_type = self.__functions[
+                function_name].parameters[param_name].type
+            if param_type in ("number", "float"):
+                parameters_dict.update({param_name: float(param_value)})
+            elif param_type == "integer":
+                parameters_dict.update({param_name: int(param_value)})
+            elif param_type == "boolean":
+                parameters_dict.update({param_name: bool(param_value)})
+            else:
+                parameters_dict.update({param_name: param_value})
+        formated_answer.update({"parameters": parameters_dict})
         return formated_answer
 
     def _generate_answer(self, user_prompt: str) -> dict[str, Any]:
