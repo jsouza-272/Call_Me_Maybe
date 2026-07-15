@@ -1,3 +1,5 @@
+"""Program entrypoint that generates and saves function-calling results."""
+
 try:
     if __name__ == "__main__":
         from .llm_interface import LlmInteface
