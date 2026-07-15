@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, cast
 
 from llm_sdk import Small_LLM_Model
 
@@ -37,7 +37,10 @@ class LlmInterface:
         self._end_token_id = self._get_end_token_id()
 
     def _get_end_token_id(self) -> int:
-        tokenized = self._model.encode(END_OF_MESSAGE_TOKEN).tolist()[0]
+        tokenized = cast(
+            list[int],
+            self._model.encode(END_OF_MESSAGE_TOKEN).tolist()[0],
+        )
         if not tokenized:
             raise ValueError("Unable to resolve end-of-message token id")
         return tokenized[0]
@@ -54,7 +57,7 @@ class LlmInterface:
         )
 
     def _encode(self, text: str) -> list[int]:
-        return self._model.encode(text).tolist()[0]
+        return cast(list[int], self._model.encode(text).tolist()[0])
 
     def _create_trie(
         self, tokenized_sequences: list[list[int]], *, append_end: bool = False
@@ -81,14 +84,18 @@ class LlmInterface:
                 best_logit = score
                 best_token = token
         if best_token < 0:
-            raise RuntimeError("No valid token available during constrained decode")
+            raise RuntimeError(
+                "No valid token available during constrained decode"
+            )
         return best_token
 
     def _generate_with_trie(self, prompt_tokens: list[int], trie: Trie) -> str:
         generated: list[int] = []
         node = trie
         for _ in range(self._max_tokens):
-            logits = self._model.get_logits_from_input_ids(prompt_tokens + generated)
+            logits = self._model.get_logits_from_input_ids(
+                prompt_tokens + generated
+            )
             allowed = set(node.children.keys())
             if not allowed:
                 break
@@ -99,10 +106,14 @@ class LlmInterface:
             node = node.children[token]
         return self._model.decode(generated).strip()
 
-    def _generate_text(self, prompt_tokens: list[int], *, stop_on_json: bool) -> str:
+    def _generate_text(
+        self, prompt_tokens: list[int], *, stop_on_json: bool
+    ) -> str:
         generated: list[int] = []
         for _ in range(self._max_tokens):
-            logits = self._model.get_logits_from_input_ids(prompt_tokens + generated)
+            logits = self._model.get_logits_from_input_ids(
+                prompt_tokens + generated
+            )
             token = max(range(len(logits)), key=logits.__getitem__)
             if token == self._end_token_id:
                 break
@@ -116,7 +127,10 @@ class LlmInterface:
     def _looks_like_completed_json(self, text: str) -> bool:
         if "{" not in text or "}" not in text:
             return False
-        return text.count("{") == text.count("}") and text.rstrip().endswith("}")
+        return (
+            text.count("{") == text.count("}")
+            and text.rstrip().endswith("}")
+        )
 
     def _select_function_name(self, user_prompt: str) -> str:
         functions_summary = "\n".join(
@@ -151,13 +165,17 @@ class LlmInterface:
         self, user_prompt: str, function_definition: FunctionDefinition
     ) -> dict[str, Any]:
         schema_json = json.dumps(
-            {name: details.type for name, details in function_definition.parameters.items()},
+            {
+                name: details.type
+                for name, details in function_definition.parameters.items()
+            },
             ensure_ascii=False,
         )
         system_message = (
             "/no_think\n"
             "Extract parameters for the selected function.\n"
-            "Return ONLY a JSON object with exactly these keys and inferred values.\n"
+            "Return ONLY a JSON object with exactly these keys "
+            "and inferred values.\n"
             "No markdown, no explanations.\n"
             f"Parameter schema: {schema_json}"
         )
@@ -166,7 +184,10 @@ class LlmInterface:
             f"User prompt: {user_prompt}"
         )
         prompt = self._chat_prompt(system_message, user_message)
-        raw_answer = self._generate_text(self._encode(prompt), stop_on_json=True)
+        raw_answer = self._generate_text(
+            self._encode(prompt),
+            stop_on_json=True,
+        )
         return self._parse_json_object(raw_answer)
 
     def _parse_json_object(self, text: str) -> dict[str, Any]:
@@ -227,10 +248,15 @@ class LlmInterface:
     def _generate_answer_for_prompt(self, user_prompt: str) -> dict[str, Any]:
         function_name = self._select_function_name(user_prompt)
         function_definition = self._functions[function_name]
-        raw_parameters = self._extract_parameters_json(user_prompt, function_definition)
+        raw_parameters = self._extract_parameters_json(
+            user_prompt,
+            function_definition,
+        )
 
         parameters: dict[str, Any] = {}
-        for parameter_name, parameter_type in function_definition.parameters.items():
+        for parameter_name, parameter_type in (
+            function_definition.parameters.items()
+        ):
             parameters[parameter_name] = self._coerce_parameter(
                 raw_parameters.get(parameter_name), parameter_type
             )
