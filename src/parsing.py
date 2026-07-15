@@ -1,66 +1,99 @@
-import sys
-from typing import TypedDict
-from json import load, JSONDecodeError
-from pydantic import ValidationError
-from .models import FunctionDefition, Prompt
-from .errors import ParsingError
+"""CLI and JSON parsing helpers."""
 
-DEFAULT_PATHS = {'func_file': 'data/input/functions_definition.json',
-                 'input_file': 'data/input/function_calling_tests.json',
-                 'output_file': 'data/output/function_calling_results.json'}
+from argparse import ArgumentParser
+from json import JSONDecodeError, load
+from typing import Any, TypedDict
+
+from pydantic import ValidationError
+
+from .errors import ParsingError
+from .models import FunctionDefinition, Prompt
+
+DEFAULT_PATHS = {
+    "functions_definition": "data/input/functions_definition.json",
+    "input": "data/input/function_calling_tests.json",
+    "output": "data/output/function_calling_results.json",
+}
 
 
 class ParsingResult(TypedDict):
+    """Parsed input files and output path."""
+
     output_file: str
-    functions: list[FunctionDefition]
+    functions: list[FunctionDefinition]
     prompts: list[Prompt]
 
 
-def cli_parsing(flag: str) -> str:
-    if flag not in sys.argv:
-        return ''
-    index = sys.argv.index(flag)
+def _build_parser() -> ArgumentParser:
+    parser = ArgumentParser(prog="python -m src")
+    parser.add_argument(
+        "--functions_definition",
+        default=DEFAULT_PATHS["functions_definition"],
+        help="Path to the functions definition JSON file.",
+    )
+    parser.add_argument(
+        "--input",
+        default=DEFAULT_PATHS["input"],
+        help="Path to the prompts JSON file.",
+    )
+    parser.add_argument(
+        "--output",
+        default=DEFAULT_PATHS["output"],
+        help="Path to the output JSON file.",
+    )
+    return parser
+
+
+def _validate_json_path(path: str, flag: str) -> None:
+    if not path.endswith(".json"):
+        raise ParsingError(
+            f'Invalid extension: "{flag}" must point to a ".json" file'
+        )
+
+
+def _load_json(path: str) -> Any:
     try:
-        if not sys.argv[index + 1].endswith('.json'):
-            raise ParsingError(f'Invalid extension: "{flag}" '
-                               'must point to a ".json" file')
-    except IndexError:
-        raise ParsingError(f'Missing path after "{flag}"')
-    return sys.argv[index + 1]
+        with open(path, encoding="utf-8") as file:
+            return load(file)
+    except FileNotFoundError as error:
+        raise ParsingError(f"File not found: {error.filename}") from error
+    except JSONDecodeError as error:
+        raise ParsingError(
+            f"Invalid JSON in '{path}': line {error.lineno}, "
+            f"column {error.colno}"
+        ) from error
 
 
 def parsing() -> ParsingResult:
-    flags = {'func_file': cli_parsing('--functions_definition'),
-             'input_file': cli_parsing('--input'),
-             'output_file': cli_parsing('--output')}
-    for key in flags.keys():
-        if not flags[key]:
-            flags[key] = DEFAULT_PATHS[key]
+    """Parse CLI args and load validated project inputs."""
+
+    args = _build_parser().parse_args()
+
+    _validate_json_path(args.functions_definition, "--functions_definition")
+    _validate_json_path(args.input, "--input")
+    _validate_json_path(args.output, "--output")
+
+    functions_json = _load_json(args.functions_definition)
+    prompts_json = _load_json(args.input)
+
     try:
-        with open(flags['func_file']) as file:
-            try:
-                functions = [FunctionDefition(**func) for func in load(file)]
-            except JSONDecodeError as e:
-                raise ParsingError(f"Invalid JSON in '{flags['func_file']}':"
-                                   f"line {e.lineno}, column {e.colno}")
-            except ValidationError as e:
-                raise ParsingError("Invalid file format: "
-                                   f"'{flags['func_file']}' contains invalid "
-                                   "or missing fields", e)
+        functions = [FunctionDefinition(**item) for item in functions_json]
+    except ValidationError as error:
+        raise ParsingError(
+            "Invalid file format: "
+            f"'{args.functions_definition}' contains invalid or missing fields"
+        ) from error
 
-        with open(flags['input_file']) as file:
-            try:
-                prompts = [Prompt(**prompt) for prompt in load(file)]
-            except JSONDecodeError as e:
-                raise ParsingError(f"Invalid JSON in '{flags['input_file']}':"
-                                   f"line {e.lineno}, column {e.colno}")
-            except ValidationError:
-                raise ParsingError("Invalid file format: "
-                                   f"'{flags['input_file']}' contains invalid "
-                                   "or missing fields")
+    try:
+        prompts = [Prompt(**item) for item in prompts_json]
+    except ValidationError as error:
+        raise ParsingError(
+            "Invalid file format: "
+            f"'{args.input}' contains invalid or missing fields"
+        ) from error
 
-    except FileNotFoundError as e:
-        raise ParsingError(f'File not found: {e.filename}')
-    return {"output_file": flags['output_file'],
-            "functions": functions,
-            "prompts": prompts}
+    return {
+        "output_file": args.output,
+        "functions": functions,
+        "prompts": prompts,
+    }

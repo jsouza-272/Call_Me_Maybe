@@ -1,351 +1,266 @@
-import math
-import re
+"""LLM integration and constrained decoding helpers."""
+
+from __future__ import annotations
+
+import json
 import os
+from typing import Any
 
 from llm_sdk import Small_LLM_Model
-from accelerate import Accelerator
-from typing import Literal, Any
-from json import load, dump
 
-from .trie import Trie
+from .models import FunctionDefinition, Prompt, Types
 from .parsing import parsing
-from .models import FunctionDefition, Types, Prompt
+from .trie import Trie
 
 
-FUNCTION: Literal['F'] = 'F'
-PARAMETERS: Literal['P'] = 'P'
-BASIC_REGEX = [".", "^", "$", "*", "+", "?", "|",
-               "[", "]", r"\d", r"\D", r"\w",
-               r"\W", r"\s", r"\S", r"\b", r"\B"]
+END_OF_MESSAGE_TOKEN = "<|im_end|>"
 
 
-class LlmInteface:
-    def __init__(self, model: str = "Qwen/Qwen3-0.6B", *,
-                 temperature: float = 0.3):
-        infos = parsing()
-        self.__functions: dict[str, FunctionDefition] = {
-            f.name: f
-            for f in infos["functions"]
-            }
-        self.__prompts: list[Prompt] = infos.get("prompts")
-        self.__output: str = infos["output_file"]
-        self.__temperature = temperature
-        self.__model = Small_LLM_Model(model, device=Accelerator().device)
-        if "Qwen3-0.6B" in model:
-            end_key = self.__model.encode("<|im_end|>").tolist()[0][0]
-        self.__end_key: int = end_key
-        with open(self.__model.get_path_to_vocab_file()) as file:
-            self.__vocab = {v: k for k, v in load(file).items()}
-        print("="*60)
-        print(f"model: {model}")
-        print(f"VOCAB_SIZE:{len(self.__vocab)}")
-        print("="*60)
+class LlmInterface:
+    """Generate structured function calls from natural language prompts."""
 
-    def _format_prompt(self, prompt: str,
-                       function_answer: str = "") -> str:
-        if not function_answer:
-            prompt = (f"<|im_start|>user\n{prompt!r}<|im_end|>"
-                      "<|im_start|>assistant\n")
-        else:
-            prompt = (f"<|im_start|>user\n{prompt!r}"
-                      f"{function_answer}<|im_end|>"
-                      "<|im_start|>assistant\n")
-        return prompt
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-0.6B",
+        *,
+        max_tokens: int = 128,
+    ) -> None:
+        parsed_data = parsing()
+        self._functions: dict[str, FunctionDefinition] = {
+            function.name: function
+            for function in parsed_data["functions"]
+        }
+        self._prompts: list[Prompt] = parsed_data["prompts"]
+        self._output_file: str = parsed_data["output_file"]
+        self._max_tokens = max_tokens
+        self._model = Small_LLM_Model(model_name)
+        self._end_token_id = self._get_end_token_id()
 
-    def _sys_prompt(self, mode: Literal['F', 'P']) -> str:
-        if mode == PARAMETERS:
-            example = ('prompt: "What is the sum of 2 and 3?n_add_numbers"\n'
-                       'assistant: a=2.0,\nb=3.0\n'
-                       'prompt: "Reverse the string \'hello\''
-                       'fn_reverse_string\n'
-                       'assistant: s=hello\n'
-                       'prompt: "Replace all numbers in \"Hello 34 I\'m 233 '
-                       'years old\" with NUMBERS.'
-                       'fn_substitute_string_with_regex"\n'
-                       'assistant: '
-                       "source_string=Hello 34 I'm 233 years old,\n"
-                       'regex=\\d+,\n'
-                       'replacement=NUMBERS\n'
-                       'promt: "Greet john'
-                       'ft_greet"\n'
-                       'assistant: name=jhon\n')
+    def _get_end_token_id(self) -> int:
+        tokenized = self._model.encode(END_OF_MESSAGE_TOKEN).tolist()[0]
+        if not tokenized:
+            raise ValueError("Unable to resolve end-of-message token id")
+        return tokenized[0]
 
-            sys_prompt = ("<|im_start|>system\n"
-                          "/no_think\n"
-                          "Extract the parameter values "
-                          "from the user prompt.\n"
-                          "Return only the paramaters of the funtion\n"
-                          "Regex rules: use the shortest pattern that "
-                          "matches only the target substring(s).\n"
-                          "Never repeat the same group or subpattern"
-                          " multiple times.\n"
-                          "Never prefix/suffix the pattern with .*, .*?,"
-                          " ^, $ or any surrounding context — match ONLY"
-                          " the target itself.\n"
-                          "One pass is always enough, like regex=\\d+.\n"
-                          f"example: {example}\n"
-                          "The functions you must use are the following: "
-                          f"{list(self.__functions.values())!r}.\n"
-                          "<|im_end|>")
-        else:
-            example = ('prompt: "What is the sum of 2 and 3?"\n'
-                       'assistant: fn_add_numbers\n'
-                       'prompt: "Reverse the string \'hello\"\n'
-                       'assistant: fn_reverse_string\n'
-                       'prompt: "What is the square root of 16?"\n'
-                       'assistant: fn_get_square_root\n')
-            sys_prompt = ("<|im_start|>system\n"
-                          "/no_think\n"
-                          "Return only the name of the funtion\n"
-                          f"example: {example}\n"
-                          "The functions you must use are the following: "
-                          f"{list(self.__functions.values())!r}.\n"
-                          "<|im_end|>")
-        return sys_prompt
+    def _chat_prompt(self, system_message: str, user_message: str) -> str:
+        return (
+            "<|im_start|>system\n"
+            f"{system_message}\n"
+            "<|im_end|>\n"
+            "<|im_start|>user\n"
+            f"{user_message}\n"
+            "<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
 
-    def _softmax(self, logits: list[float]) -> list[float]:
-        max_logit = max(logits)
-        new = [math.exp((logit - max_logit) / self.__temperature)
-               for logit in logits]
-        logits_sum = sum(new)
-        logits_sum = 1 if not logits_sum else logits_sum
-        return [logit / logits_sum for logit in new]
+    def _encode(self, text: str) -> list[int]:
+        return self._model.encode(text).tolist()[0]
 
-    def _create_trie(self, tokens_list: list[list[int]],
-                     end_key: bool = False) -> Trie:
+    def _create_trie(
+        self, tokenized_sequences: list[list[int]], *, append_end: bool = False
+    ) -> Trie:
         root = Trie(-1)
-        for tokens in tokens_list:
-            if end_key:
-                tokens.append(self.__end_key)
+        for sequence in tokenized_sequences:
+            tokens = sequence.copy()
+            if append_end:
+                tokens.append(self._end_token_id)
             node = root
             for token in tokens:
-                if (isinstance(token, list)
-                        and all(t not in node.children for t in token)):
-                    node.add_children(Trie(token))
-                elif token not in node.children:
-                    node.add_children(Trie(token))
+                if token not in node.children:
+                    node.add_child(Trie(token))
                 node = node.children[token]
             node.is_end = True
         return root
 
-    def _get_function_name(self, logits: list[float], trie: Trie) -> None:
-        for index in range(len(logits)):
-            if index in trie.children:
-                continue
-            elif index not in self.__vocab:
-                logits[index] = float("-inf")
-                continue
-            else:
-                logits[index] = float("-inf")
+    def _pick_best_token(self, logits: list[float], allowed: set[int]) -> int:
+        best_token = -1
+        best_logit = float("-inf")
+        for token in allowed:
+            score = logits[token]
+            if score > best_logit:
+                best_logit = score
+                best_token = token
+        if best_token < 0:
+            raise RuntimeError("No valid token available during constrained decode")
+        return best_token
 
-    def _generate_function(self, tokenized_prompt: list) -> str:
-        trie = self._create_trie([self.__model.encode(
-            func.name
-            ).tolist()[0] for func in self.__functions.values()],
-            True)
-        function_name: list = list()
-        while True:
-            logits = self.__model.get_logits_from_input_ids(
-                tokenized_prompt + function_name
-                )
-            self._get_function_name(logits, trie)
-            logits = self._softmax(logits)
-            token = logits.index(max(logits))
-            if not trie.children or token == self.__end_key:
+    def _generate_with_trie(self, prompt_tokens: list[int], trie: Trie) -> str:
+        generated: list[int] = []
+        node = trie
+        for _ in range(self._max_tokens):
+            logits = self._model.get_logits_from_input_ids(prompt_tokens + generated)
+            allowed = set(node.children.keys())
+            if not allowed:
                 break
-            function_name.append(token)
-            trie = trie.children[token]
-        return self.__model.decode(function_name)
-
-    def _get_param_value_number(self, logits: list[float],
-                                answer: str) -> None:
-        dot_in_answer = answer and "." in answer.splitlines()[-1]
-        tokenized_dot = [-1]
-        tokenized_comma = [-1]
-        if not dot_in_answer:
-            tokenized_dot = self.__model.encode(".").tolist()[0]
-        if dot_in_answer:
-            tokenized_comma = self.__model.encode(",").tolist()[0]
-        for index in range(len(logits)):
-            if (answer.endswith("\n")
-                    and not index == self.__end_key):
-                logits[index] = float("-inf")
-                continue
-            elif index == self.__end_key:
-                continue
-            elif index not in self.__vocab:
-                logits[index] = float("-inf")
-                continue
-            elif not dot_in_answer and index in tokenized_dot:
-                continue
-            elif dot_in_answer and index in tokenized_comma:
-                continue
-            elif re.fullmatch(r"[\d\n]*", self.__model.decode([index])):
-                continue
-            logits[index] = float("-inf")
-
-    def _get_param_value_string(self, logits: list[float],
-                                answer: str, regex: bool) -> None:
-        newline = not answer.splitlines()[-1].endswith("=")
-        current_value = answer.splitlines()[-1].split("=")[-1]
-        has_escape = bool(re.search(r"\\\w", current_value))
-        has_group = current_value.count("(") >= 1
-        for index in range(len(logits)):
-            token = self.__model.decode([index])
-            if (answer.endswith("\n")
-                    and not index == self.__end_key):
-                logits[index] = float("-inf")
-                continue
-            elif index == self.__end_key:
-                continue
-            elif (regex and current_value == ""
-                    and re.fullmatch(r"[.^*+?]\S*", token)):
-                logits[index] = float("-inf")
-                continue
-            elif regex and has_escape and re.fullmatch(r"\\\w", token):
-                logits[index] = float("-inf")
-                continue
-            elif regex and has_group and "(" in token:
-                logits[index] = float("-inf")
-                continue
-            elif newline and re.fullmatch(r"[,\n]*", token):
-                continue
-            elif regex and re.fullmatch(
-                    r"\\\w|[\w\s+*?.\[\]()^$'-]+", token):
-                continue
-            elif not regex and re.fullmatch(
-                r"[\w\s.,*\\\/{}\[\]():;'+=-_!?]+",
-                    token):
-                continue
-            logits[index] = float("-inf")
-
-    def _get_param_value_boolean(self, logits: list[float],
-                                 trie: Trie) -> None:
-        for index in range(len(logits)):
-            if index in trie.children:
-                continue
-            logits[index] = float("-inf")
-
-    def _get_param_value(self, tokenized_prompt: list[int],
-                         param: str, param_type: Types, regex: bool) -> str:
-        tokenized_param = self.__model.encode(param).tolist()[0]
-        boolean_trie = self._create_trie([self.__model.encode(tf).tolist()[0]
-                                          for tf in ["true", "false"]])
-        while True:
-            logits = self.__model.get_logits_from_input_ids(
-                tokenized_prompt + tokenized_param
-            )
-            if param_type.type in ("number", "integer", "float"):
-                self._get_param_value_number(
-                    logits,
-                    self.__model.decode(tokenized_param)
-                )
-            elif param_type.type == "string":
-                self._get_param_value_string(
-                    logits,
-                    self.__model.decode(tokenized_param),
-                    regex
-                    )
-            elif param_type.type == "boolean":
-                self._get_param_value_boolean(logits, boolean_trie)
-            logits = self._softmax(logits)
-            token = logits.index(max(logits))
-            if token == self.__end_key:
+            token = self._pick_best_token(logits, allowed)
+            if token == self._end_token_id:
                 break
-            if token in boolean_trie.children:
-                boolean_trie = boolean_trie.children[token]
-            tokenized_param.append(token)
-            print(self.__model.decode(tokenized_param))
-        return self.__model.decode(tokenized_param)
+            generated.append(token)
+            node = node.children[token]
+        return self._model.decode(generated).strip()
 
-    def _generate_parameters(self, tokenized_prompt: list,
-                             function_name: str) -> str:
-        parameters = ""
-        parameters_name = list(
-            self.__functions[function_name].parameters.keys()
-            )
-        for param_name in parameters_name:
-            parameters += param_name + "="
-            print("\nparam_name:", param_name)
-            parameters = self._get_param_value(
-                tokenized_prompt,
-                parameters,
-                self.__functions[function_name].parameters[param_name],
-                param_name == "regex")
-        return parameters
+    def _generate_text(self, prompt_tokens: list[int], *, stop_on_json: bool) -> str:
+        generated: list[int] = []
+        for _ in range(self._max_tokens):
+            logits = self._model.get_logits_from_input_ids(prompt_tokens + generated)
+            token = max(range(len(logits)), key=logits.__getitem__)
+            if token == self._end_token_id:
+                break
+            generated.append(token)
+            if stop_on_json:
+                current_text = self._model.decode(generated)
+                if self._looks_like_completed_json(current_text):
+                    break
+        return self._model.decode(generated).strip()
 
-    def _check_prompt(self, prompt: str, func: str) -> bool:
-        if self.__functions[func].returns.type == "number":
-            if not re.search(r"\d+\.?\d*", prompt):
-                return False
-        return True
+    def _looks_like_completed_json(self, text: str) -> bool:
+        if "{" not in text or "}" not in text:
+            return False
+        return text.count("{") == text.count("}") and text.rstrip().endswith("}")
 
-    def _build_json(self, function_name: str,
-                    parameters: str) -> dict[str, Any]:
-        split_parameters = parameters.splitlines()
-        formated_answer: dict[str, Any] = {"name": function_name}
-        parameters_dict: dict[str, Any] = {}
-        for param in split_parameters:
-            param_name = param.split("=", 1)[0]
-            param_value = param.split("=", 1)[1].strip().strip(",")
-            param_type = self.__functions[
-                function_name].parameters[param_name].type
-            if param_type in ("number", "float"):
-                parameters_dict.update({param_name: float(param_value)})
-            elif param_type == "integer":
-                parameters_dict.update({param_name: int(param_value)})
-            elif param_type == "boolean":
-                parameters_dict.update({param_name: bool(param_value)})
-            else:
-                parameters_dict.update({param_name: param_value})
-        formated_answer.update({"parameters": parameters_dict})
-        return formated_answer
-
-    def _generate_answer(self, user_prompt: str) -> dict[str, Any]:
-        sys_prompt = self._sys_prompt(FUNCTION)
-        formated_user_prompt = self._format_prompt(user_prompt)
-        tokenized_user_prompt = self.__model.encode(
-            formated_user_prompt
-        ).tolist()[0]
-        tokenized_sys_prompt = self.__model.encode(
-            sys_prompt
-            ).tolist()[0]
-
-        function_answer = self._generate_function(
-            tokenized_sys_prompt + tokenized_user_prompt
-            )
-
-        if not self._check_prompt(user_prompt, function_answer):
-            raise ValueError("CADE!!!!!!!!!")
-
-        formated_user_prompt = self._format_prompt(
-            user_prompt, function_answer
+    def _select_function_name(self, user_prompt: str) -> str:
+        functions_summary = "\n".join(
+            f"- {function.name}: {function.description}"
+            for function in self._functions.values()
         )
-        tokenized_user_prompt = self.__model.encode(
-            formated_user_prompt
-        ).tolist()[0]
-        sys_prompt = self._sys_prompt(PARAMETERS)
-        tokenized_sys_prompt = self.__model.encode(
-                sys_prompt
-                ).tolist()[0]
-        parameters_answer = self._generate_parameters(
-                tokenized_sys_prompt +
-                tokenized_user_prompt,
-                function_answer
-                )
-        return self._build_json(function_answer, parameters_answer)
+        system_message = (
+            "/no_think\n"
+            "Select exactly one function name from the list below.\n"
+            "Return only the function name and nothing else.\n"
+            f"{functions_summary}"
+        )
+        prompt = self._chat_prompt(system_message, user_prompt)
+        prompt_tokens = self._encode(prompt)
+        encoded_names: list[list[int]] = []
+        for name in self._functions.keys():
+            encoded_names.append(self._encode(name))
+            encoded_names.append(self._encode(f" {name}"))
+        trie = self._create_trie(encoded_names, append_end=True)
+        selected_name = self._generate_with_trie(prompt_tokens, trie).strip()
+        if selected_name in self._functions:
+            return selected_name
+        normalized = selected_name.strip()
+        if normalized in self._functions:
+            return normalized
+        for known_name in self._functions.keys():
+            if known_name in normalized:
+                return known_name
+        return next(iter(self._functions))
 
-    def genrate(self) -> list[dict[str, str]]:
-        answer_list = []
-        for p in self.__prompts:
-            print(p)
-            answer = {"prompt": f"{p!r}"}
-            answer.update(self._generate_answer(f"{p!r}"))
-            answer_list.append(answer)
-        return answer_list
+    def _extract_parameters_json(
+        self, user_prompt: str, function_definition: FunctionDefinition
+    ) -> dict[str, Any]:
+        schema_json = json.dumps(
+            {name: details.type for name, details in function_definition.parameters.items()},
+            ensure_ascii=False,
+        )
+        system_message = (
+            "/no_think\n"
+            "Extract parameters for the selected function.\n"
+            "Return ONLY a JSON object with exactly these keys and inferred values.\n"
+            "No markdown, no explanations.\n"
+            f"Parameter schema: {schema_json}"
+        )
+        user_message = (
+            f"Selected function: {function_definition.name}\n"
+            f"User prompt: {user_prompt}"
+        )
+        prompt = self._chat_prompt(system_message, user_message)
+        raw_answer = self._generate_text(self._encode(prompt), stop_on_json=True)
+        return self._parse_json_object(raw_answer)
 
-    def save_json(self, obj: list[dict[str, str]]) -> None:
-        output_path = "".join(d + "/" for d in self.__output.split("/")[:-1])
-        os.makedirs(output_path, exist_ok=True)
-        with open(self.__output, "w", encoding="utf-8") as file:
-            dump(obj, file, ensure_ascii=False, indent=4)
+    def _parse_json_object(self, text: str) -> dict[str, Any]:
+        candidate = text.strip()
+        if not candidate:
+            return {}
+        parsed = self._try_parse_json(candidate)
+        if parsed is not None:
+            return parsed
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return {}
+        parsed = self._try_parse_json(candidate[start:end + 1])
+        return parsed if parsed is not None else {}
+
+    def _try_parse_json(self, text: str) -> dict[str, Any] | None:
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+        return None
+
+    def _default_for_type(self, expected_type: str) -> Any:
+        if expected_type in {"number", "float"}:
+            return 0.0
+        if expected_type == "integer":
+            return 0
+        if expected_type == "boolean":
+            return False
+        return ""
+
+    def _coerce_parameter(self, value: Any, expected: Types) -> Any:
+        if value is None:
+            return self._default_for_type(expected.type)
+        try:
+            if expected.type in {"number", "float"}:
+                return float(value)
+            if expected.type == "integer":
+                return int(float(value))
+            if expected.type == "boolean":
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, (int, float)):
+                    return bool(value)
+                lowered = str(value).strip().lower()
+                if lowered in {"true", "1", "yes"}:
+                    return True
+                if lowered in {"false", "0", "no"}:
+                    return False
+                return False
+            return str(value)
+        except (TypeError, ValueError):
+            return self._default_for_type(expected.type)
+
+    def _generate_answer_for_prompt(self, user_prompt: str) -> dict[str, Any]:
+        function_name = self._select_function_name(user_prompt)
+        function_definition = self._functions[function_name]
+        raw_parameters = self._extract_parameters_json(user_prompt, function_definition)
+
+        parameters: dict[str, Any] = {}
+        for parameter_name, parameter_type in function_definition.parameters.items():
+            parameters[parameter_name] = self._coerce_parameter(
+                raw_parameters.get(parameter_name), parameter_type
+            )
+        return {
+            "prompt": user_prompt,
+            "name": function_name,
+            "parameters": parameters,
+        }
+
+    def generate(self) -> list[dict[str, Any]]:
+        """Generate function-calling outputs for all loaded prompts."""
+
+        return [
+            self._generate_answer_for_prompt(prompt.prompt)
+            for prompt in self._prompts
+        ]
+
+    def save_json(self, results: list[dict[str, Any]]) -> None:
+        """Persist generated outputs in the configured output path."""
+
+        output_dir = os.path.dirname(self._output_file)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        with open(self._output_file, "w", encoding="utf-8") as output_file:
+            json.dump(results, output_file, ensure_ascii=False, indent=4)
+
+    # Backward-compatible method names used by older code.
+    def genrate(self) -> list[dict[str, Any]]:
+        return self.generate()
+
+
+# Backward-compatible alias for existing imports.
+LlmInteface = LlmInterface

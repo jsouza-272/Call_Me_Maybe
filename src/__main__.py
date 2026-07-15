@@ -1,14 +1,26 @@
-try:
-    if __name__ == "__main__":
-        from .llm_interface import LlmInteface
+"""Program entry point for function-calling generation."""
 
-        llm = LlmInteface()
-        llm.save_json(llm.genrate())
+from .errors import ParsingError
+from .llm_interface import LlmInterface
 
-except Exception as e:
-    print(f"\033[38;2;240;20;20m{e}\033[0m")
 
-except KeyboardInterrupt:
-    print("\033[38;2;240;230;20m",
-          "\nEnding program",
-          "\033[0m", sep="")
+def main() -> int:
+    """Run the end-to-end generation pipeline."""
+
+    try:
+        interface = LlmInterface()
+        interface.save_json(interface.generate())
+    except KeyboardInterrupt:
+        print("Execution interrupted by user.")
+        return 130
+    except (ParsingError, ValueError, RuntimeError) as error:
+        print(f"Error: {error}")
+        return 1
+    except Exception as error:  # defensive fallback for graceful behavior
+        print(f"Unexpected error: {error}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

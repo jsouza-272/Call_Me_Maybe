@@ -13,7 +13,6 @@ dependencies = [
     "pydantic>=2.13.4",
     "uv>=0.11.21",
     "numpy>=2.2.6",
-    "accelerate>=1.14.0",
 ]
 
 [tool.flake8]
