@@ -31,4 +31,7 @@ lint: install
 	--ignore-missing-imports --disallow-untyped-defs \
 	--check-untyped-defs
 
-.PHONY: lint install run
+debug: install
+    uv run python -m pdb -m src
+
+.PHONY: lint install run debug
