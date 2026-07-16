@@ -1,6 +1,6 @@
 """Pydantic models used to validate project input files."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 
 
@@ -46,7 +46,7 @@ class Prompt(BaseModel):
     """Represent a single user prompt loaded from input JSON."""
 
     model_config = ConfigDict(extra='forbid')
-    prompt: str
+    prompt: str = Field(min_length=1)
 
     def __repr__(self) -> str:
         """Return the raw prompt text.

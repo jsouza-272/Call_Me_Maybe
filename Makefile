@@ -12,12 +12,11 @@ install:
 	fi
 	@if [ "$(UV_CHECK)" = "0" ]; then \
 		.venv/bin/pip install uv; \
-		.venv/bin/uv sync; \
 	fi
+	.venv/bin/uv sync;
 
 run: install
-	$(UV) run python3 -m src --input moulinette/successfully/input/function_calling_tests.json \
-	--functions_definition moulinette/successfully/input/functions_definition.json
+	$(UV) run python3 -m src
 
 clean:
 	@rm -rf */__pycache__
@@ -32,6 +31,6 @@ lint: install
 	--check-untyped-defs
 
 debug: install
-    uv run python -m pdb -m src
+	uv run python -m pdb -m src
 
 .PHONY: lint install run debug

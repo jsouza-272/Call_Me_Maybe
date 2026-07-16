@@ -343,7 +343,6 @@ class LlmInteface:
             if token in boolean_trie.children:
                 boolean_trie = boolean_trie.children[token]
             tokenized_param.append(token)
-            print(self.__model.decode(tokenized_param))
         return self.__model.decode(tokenized_param)
 
     def _generate_parameters(self, tokenized_prompt: list,
@@ -363,28 +362,12 @@ class LlmInteface:
             )
         for param_name in parameters_name:
             parameters += param_name + "="
-            print("\nparam_name:", param_name)
             parameters = self._get_param_value(
                 tokenized_prompt,
                 parameters,
                 self.__functions[function_name].parameters[param_name],
                 param_name == "regex")
         return parameters
-
-    def _check_prompt(self, prompt: str, func: str) -> bool:
-        """Validate prompt content for selected function return expectations.
-
-        Args:
-            prompt: Original user prompt.
-            func: Selected function name.
-
-        Returns:
-            ``True`` when the prompt passes validation, otherwise ``False``.
-        """
-        if self.__functions[func].returns.type == "number":
-            if not re.search(r"\d+\.?\d*", prompt):
-                return False
-        return True
 
     def _build_json(self, function_name: str,
                     parameters: str) -> dict[str, Any]:
@@ -424,9 +407,6 @@ class LlmInteface:
 
         Returns:
             Dictionary containing function name and parsed parameters.
-
-        Raises:
-            ValueError: If the selected function fails prompt validation.
         """
         sys_prompt = self._sys_prompt(FUNCTION)
         formated_user_prompt = self._format_prompt(user_prompt)
@@ -440,9 +420,6 @@ class LlmInteface:
         function_answer = self._generate_function(
             tokenized_sys_prompt + tokenized_user_prompt
             )
-
-        if not self._check_prompt(user_prompt, function_answer):
-            raise ValueError("CADE!!!!!!!!!")
 
         formated_user_prompt = self._format_prompt(
             user_prompt, function_answer
